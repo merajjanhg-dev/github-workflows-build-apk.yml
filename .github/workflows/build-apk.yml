@@ -1,173 +1,92 @@
-name: Build APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Get repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 21
 
-      - name: Create Android project
+      - name: Prepare web app
         run: |
-          mkdir -p app/src/main/java/com/meraj/exampanel
-          mkdir -p app/src/main/assets
+          set -e
+          mkdir -p www
 
-          cp index.html app/src/main/assets/index.html
+          HTML_FILE=$(find . -maxdepth 2 -type f -name "*.html" \
+            ! -path "./www/*" \
+            ! -path "./android/*" | head -n 1)
 
-          cat > settings.gradle <<'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
+          if [ -z "$HTML_FILE" ]; then
+            echo "ERROR: No HTML file found."
+            exit 1
+          fi
 
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-          }
+          echo "HTML file found: $HTML_FILE"
+          cp "$HTML_FILE" www/index.html
 
-          rootProject.name = "ExamPanelAndroid"
-          include(":app")
-          EOF
+          echo "Web app prepared:"
+          ls -la www
 
-          cat > build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.7.3' apply false
+      - name: Create package.json
+        run: |
+          cat > package.json <<'EOF'
+          {
+            "name": "exam-panel-app",
+            "version": "1.0.0",
+            "private": true
           }
           EOF
 
-          cat > app/build.gradle <<'EOF'
-          plugins {
-              id 'com.android.application'
-          }
+      - name: Install Capacitor
+        run: |
+          npm install @capacitor/core@8 @capacitor/cli@8 @capacitor/android@8
 
-          android {
-              namespace 'com.meraj.exampanel'
-              compileSdk 35
+      - name: Create Capacitor config
+        run: |
+          cat > capacitor.config.ts <<'EOF'
+          import type { CapacitorConfig } from '@capacitor/cli';
 
-              defaultConfig {
-                  applicationId 'com.meraj.exampanel'
-                  minSdk 23
-                  targetSdk 35
-                  versionCode 1
-                  versionName '1.0'
-              }
-          }
+          const config: CapacitorConfig = {
+            appId: 'com.meraj.exam',
+            appName: 'پنل آمادگی آزمون جامع',
+            webDir: 'www'
+          };
+
+          export default config;
           EOF
 
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+      - name: Add Android
+        run: |
+          npx cap add android
 
-              <uses-permission android:name="android.permission.INTERNET" />
-
-              <application
-                  android:theme="@style/AppTheme"
-                  android:label="پنل آمادگی آزمون جامع"
-                  android:usesCleartextTraffic="true"
-                  android:allowBackup="true">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:screenOrientation="portrait"
-                      android:exported="true">
-
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
-                      </intent-filter>
-
-                  </activity>
-
-              </application>
-
-          </manifest>
-          EOF
-
-          mkdir -p app/src/main/res/values
-
-          cat > app/src/main/res/values/styles.xml <<'EOF'
-          <resources>
-              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-                  <item name="android:fontFamily">sans</item>
-                  <item name="android:windowLightStatusBar">false</item>
-                  <item name="android:statusBarColor">#111827</item>
-                  <item name="android:navigationBarColor">#000000</item>
-              </style>
-          </resources>
-          EOF
-
-          cat > app/src/main/java/com/meraj/exampanel/MainActivity.java <<'EOF'
-          package com.meraj.exampanel;
-
-          import android.app.Activity;
-          import android.os.Bundle;
-          import android.webkit.WebSettings;
-          import android.webkit.WebView;
-          import android.webkit.WebViewClient;
-
-          public class MainActivity extends Activity {
-
-              private WebView webView;
-
-              @Override
-              protected void onCreate(Bundle savedInstanceState) {
-                  super.onCreate(savedInstanceState);
-
-                  webView = new WebView(this);
-                  setContentView(webView);
-
-                  WebSettings settings = webView.getSettings();
-
-                  settings.setJavaScriptEnabled(true);
-                  settings.setDomStorageEnabled(true);
-                  settings.setDatabaseEnabled(true);
-                  settings.setAllowFileAccess(true);
-                  settings.setAllowContentAccess(true);
-                  settings.setBuiltInZoomControls(false);
-                  settings.setDisplayZoomControls(false);
-
-                  webView.setWebViewClient(new WebViewClient());
-
-                  webView.loadUrl("file:///android_asset/index.html");
-              }
-
-              @Override
-              public void onBackPressed() {
-                  if (webView.canGoBack()) {
-                      webView.goBack();
-                  } else {
-                      super.onBackPressed();
-                  }
-              }
-          }
-          EOF
+      - name: Sync Android
+        run: |
+          npx cap sync android
 
       - name: Build APK
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Run Gradle build
-        run: gradle assembleDebug --no-daemon
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ExamPanel-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: exam-panel-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
